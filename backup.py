@@ -7,15 +7,17 @@ from sage.categories.homset import Hom
 from sage.rings.qqbar import AlgebraicField
 from sage.rings.rational_field import RationalField
 from sage.rings.qqbar import number_field_elements_from_algebraics
+from sage.rings.integer_ring import IntegerRing
 from sage.modules.free_module_element import vector
 from sage.symbolic.constants import I
 from sage.rings.complex_mpfr import ComplexField
 from sage.rings.real_mpfr import RealField
-from sage.all import arg, log
+from sage.all import arg, log, factorial, ceil, prod, falling_factorial
 
 
 
-def voronoi(pts):
+
+def voronoi(pts, n = 6):
 
     from sage.geometry.voronoi_diagram import VoronoiDiagram
 
@@ -24,9 +26,6 @@ def voronoi(pts):
         if alpha != beta 
     ])
 
-    print(smallest_dist)
-    print(log(smallest_dist, 2))
-    print(RealField()(log(smallest_dist, 2)))
 
     prec = int(-RealField()(log(smallest_dist, 2))) + 53
 
@@ -34,7 +33,7 @@ def voronoi(pts):
 
     centre = sum(pts)/len(pts)
     radius = 2 * max([abs(centre - z) for z in pts])
-    z = AlgebraicField().zeta(6)
+    z = AlgebraicField().zeta(n)
     circle_points = [C(centre + radius * z ** i) for i in range(6)]
 
     return VoronoiDiagram([C(v) for v in pts] + circle_points)
@@ -43,7 +42,9 @@ def voronoi(pts):
 
 class MixedHodgeStructure:
 
-    def __init__(self, P, D, E):
+    def __init__(self, P, D, E, prec = 53):
+
+        self._prec = prec
         self._P = P
 
         self._D_infinite = [a[:2] for a in D if (len(a) == 3 and a[-1] == 0)]
@@ -128,6 +129,133 @@ class MixedHodgeStructure:
 
         return 'Mixed Hodge structure associated to the curve C: {} = 0'.format(self._P) + s_D + s_E
 
+
+    def _get_annihilator(self, g):
+
+        F = g.parent().constant_base_field()
+
+        derivatives = []
+        r = 0
+        while matrix(derivatives).rank() == r:
+            derivatives.append((g.higher_derivative(r)*factorial(r)).list())
+            r += 1
+        v = matrix(derivatives).kernel().basis()[0]
+
+        from ore_algebra import OreAlgebra
+
+        pols = PolynomialRing(F, names = 't')
+        t = pols.gen()
+        Dt = OreAlgebra(pols,'Dt').gen()
+
+        v *= lcm(f.denominator() for f in v)
+
+        return sum(f.element().numerator()(t) * Dt ** i for i,f in enumerate(v))
+
+
+    def _get_initial_data(self, g, p):
+        #input: element of the function field g, an affine point/place p 
+        #output: the annihilator L of g and the initial datas [[c_0, ... ,c_d], ... ] such that 
+        #g is the solution to L * g given any element of the initial data.
+        #note that when L is non-singular at x(p), then there is only one initial data
+
+
+        #NOTE: we are doing a lot over Qbar in this function, it could be faster if we work over the field K(I)
+        #where K is the field over which g is defined and I is the imaginary unit.
+        #this should not be too much work but it could be
+
+        #note to future stef: we (you and i) should make sure that if we do this, a has to be defined over Q(I)
+        #which is not the case as it is now I think. 
+        '''
+
+        K = g.parent().constant_base_field()
+        t = PolynomialRing(K, names = 't').gen()
+        if not (t ** 2 + 1).roots():
+            K_I = K.extension(t ** 2 + 1, names = 'I')
+
+            if AlgebraicField().coerce_map_from(K_I) == None:
+
+                AlgebraicField().register_coercion(
+                    Hom(K_I, AlgebraicField())([AlgebraicField()(I)])
+                )
+            temp = FunctionField(K_I, names = 'x')
+            x_temp = temp.gen()
+            Y = PolynomialRing(temp, names = 'Y').gen()
+            kC_I = temp.extension(self._P(x_temp,Y), names = 'y')
+        
+        else: 
+            kC_I = g.parent()
+
+        print(kC.coerce_map_from(kC_I))
+        '''
+
+        kC = self._function_field_Qbar
+
+        x = self._x
+        a,b = p
+
+        L = self._get_annihilator(g) 
+        t = L.base_ring().gen()
+        rho_values = [RationalField()(z.degree(t)) for z in L.local_basis_monomials(a)]
+        L_i = lambda f,i : (kC(x) - a) * f.derivative() - rho_values[i] * f
+
+        def S_n(f,n): 
+            for i in range(n):
+                f = L_i(f,i)
+            return f
+
+        def eval(g):
+            #We made sure to check for singular points before so we know that evaluation at
+            #a place will be the same as at the point. 
+            s = PolynomialRing(AlgebraicField(), names = 's').gen()
+
+            numerator = sum(
+                sum(c * a**j for j,c in enumerate(f.element().numerator().list())) * 
+                s ** i for i,f in enumerate(g.element().numerator().list())
+            )
+            denominator = sum(
+                c * a ** j for j,c in enumerate(g.element().denominator().list())
+            )
+        
+            if denominator != 0: 
+                return numerator(b)/denominator 
+            
+            #if the denominator is equal to 0 then we have a 0/0 situation on our hand and we 
+            #evaluate at a place. 
+
+            p_place = kC.maximal_order().ideal(kC(self._x) - a, kC(self._y) - b).place()
+            return g.evaluate(p_place)
+
+
+        initial_values = []
+            
+        for n,rho in enumerate(rho_values): 
+            Lambda = prod(rho - rho_values[i] for i in range(n))
+            k = max(0, ceil(rho))
+            h_n = S_n(g, n)
+
+            u,v = abs((rho - k).numerator()), abs((rho - k).denominator())
+            f_d_rho = falling_factorial(rho,k)
+
+            #this part takes a while since everything is defined over Qbar which tends to be slow
+            c_n_v = eval(
+                ((kC(x) - a) ** u) * ((~(f_d_rho * Lambda) * factorial(k) * h_n.higher_derivative(k)) ** v)
+            ) 
+
+
+            z = AlgebraicField().zeta(v)
+            c_n = AlgebraicField()(c_n_v ** (1/v))
+            initial_values.append([c_n * z ** i for i in range(v)])
+            
+        #book keeping for initial values, we have all the possibilities for every coefficient of the 
+        #monomial basis, but we want to package initial conditions as [c_0, c_1, .., c_n] not as
+        #[[possible c_0], [possible c_1], .., [possible c_n]]
+        from itertools import product
+        output = [list(tup) for tup in product(*initial_values)]
+
+        return L, output 
+
+
+
     def _check_singularities(self):
 
         from sage.arith.misc import gcd
@@ -197,6 +325,7 @@ class MixedHodgeStructure:
 
 
         if self._genus == 0:
+            self._index = 1
             return []
         #right now the off_set is constant zero but we would like it to not be equal to the   
         #x coordinate of a point in E or a branch point
@@ -521,9 +650,9 @@ class MixedHodgeStructure:
         V, f, _ = self.cohomology()
         return [f(v) for v in V.basis()]
     
-    def _lift_pt(self, v):
-        t = PolynomialRing(AlgebraicField(), names = '')
-        return self._P(v, t).roots(multiplicities = False)
+    def lift_pt(self, v):
+        t = PolynomialRing(AlgebraicField(), names = 't').gen()
+        return self._P(v, t).roots(ring = AlgebraicField(), multiplicities = False)
 
 
     def _set_plane_graph(self):
@@ -534,7 +663,7 @@ class MixedHodgeStructure:
 
         self.branch_points_and_xD = self.branch_points + [x[0] for x in self._D if x[0] not in self.branch_points]  
 
-        V = voronoi(self.branch_points_and_xD)
+        V = voronoi(self.branch_points_and_xD, n = 6)
         self._voronoi_graph = V
         
         relevant_points = V.points()[:len(self.branch_points_and_xD)]
@@ -558,7 +687,9 @@ class MixedHodgeStructure:
             new_edges = list(zip(local_vertices, local_vertices[1:] + local_vertices[:1]))
 
             self._plane_loops.append(new_edges)
-            self._plane_edges.extend([e for e in new_edges])
+            self._plane_edges.extend([
+                e for e in new_edges if (e not in self._plane_edges and (e[1],e[0]) not in self._plane_edges)
+                ])
 
         infinite_regions = [V.regions().get(p) for p in V.points()[len(self.branch_points_and_xD):]]
         outside_vertices = [
@@ -573,7 +704,6 @@ class MixedHodgeStructure:
 
         for e in self._E:
             if e[0] not in self._plane_verts:
-                print('hi')
                 close_to_e = min(
                     self._plane_verts,
                     key = lambda z : abs(z - e[0]) 
@@ -588,4 +718,41 @@ class MixedHodgeStructure:
         if not hasattr(self, '_plane_verts'):
             self._set_plane_graph()
 
-      
+        from sage.schemes.riemann_surfaces.riemann_surface import RiemannSurface, ConvergenceError
+
+        C = RiemannSurface(self._P, differentials = [], prec = self._prec)
+        self._C = C 
+
+        self._upstairs_graph = []
+        remaining_edges = []
+
+        for e in self._plane_edges:
+
+            if not (e[0] in self.branch_points or e[1] in self.branch_points):
+
+                ini_lifts = self.lift_pt(e[0])
+                ter_lifts = self.lift_pt(e[1])
+
+                print(e)
+                try: 
+                    temp = [(E[0], E[-1]) for E in zip(*[x[1] for x in C.homotopy_continuation(e)])]
+                except ConvergenceError: 
+                    C_high_prec = RiemannSurface(self._P, differentials = [], prec = 2 * self._prec)
+                    temp = [(E[0], E[-1]) for E in zip(*[x[1] for x in C_high_prec.homotopy_continuation(e)])]
+
+                for a,b in temp: 
+                    ini = (
+                        e[0], ini_lifts.index(min(ini_lifts, key = lambda alpha : (a - alpha).norm()))
+                    )
+                    ter = (
+                        e[1], ter_lifts.index(min(ter_lifts, key = lambda alpha : (b - alpha).norm()))
+                    )
+                    
+                    self._upstairs_graph.append((ini,ter))
+            else: 
+                remaining_edges.append(e)
+
+            self.remaining_edges = remaining_edges
+
+
+
