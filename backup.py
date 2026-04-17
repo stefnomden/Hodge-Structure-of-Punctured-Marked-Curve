@@ -883,7 +883,11 @@ class MixedHodgeStructure:
 
                         #the lifted edge here is going to connect to ini but spiritually (and mathematically) this edge corresponds 
                         #to the point in the normalization corresponding to this place. 
-                        self._edge_dict.update({(ini,ter) : corresponding_places[k]}) 
+                        print('place:', corresponding_places[k])
+                        if corresponding_places[k] != None: 
+                            self._edge_dict.update({(ini,ter) : corresponding_places[k]}) 
+                        else: 
+                            self._edge_dict.update({(ini, ter) : self._E_places[self._E_unzipped.index((e[0],initial_pt))]})
                         
 
         self._upstairs_vertices = list(set(
@@ -1072,7 +1076,6 @@ class MixedHodgeStructure:
         ini = [0] + [~(rho + 1) * c for rho , c in zip(rho_values, inits[0])]
         path = [AlgebraicField()(start[0]), AlgebraicField()(end[0])]
 
-        print(eps)
         integral = (L.annihilator_of_integral()).numerical_solution(ini = ini, path = path, eps = eps)
 
         if reversed: 
