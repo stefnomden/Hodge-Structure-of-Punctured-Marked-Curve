@@ -124,6 +124,16 @@ class MixedHodgeStructure:
         self._function_field_Qbar = K.extension(P(x,Y), names = 'y')
 
 
+        #here we define the places corresponding to E. we do this over QQbar for now but this can be done more generally
+        if not self._E_empty: 
+            OCoo = self._function_field_Qbar.maximal_order()
+            x,y = OCoo(self._x), OCoo(self._y)
+            places_with_point = [(e,p) for e in self._E for p in OCoo.ideal(x - e[0], y - e[1]).divisor().support()]
+            self._E_places = [p for _,p in places_with_point]
+            self._E_unzipped = [e for e,_ in places_with_point] 
+            self._E_dict = {p : i for i,p in enumerate(self._E_places)}
+
+
         C = RiemannSurface(self._P, differentials = [], prec = self._prec)
         self._C = C 
 
@@ -172,7 +182,7 @@ class MixedHodgeStructure:
         return sum(f.element().numerator()(t) * Dt ** i for i,f in enumerate(v))
 
 
-    def _get_initial_data(self, g, p, annihilator = None, local_basis = False):
+    def _get_initial_data(self, g, p, annihilator = None, local_basis = False, with_places = False):
         #input: element of the function field g, an affine point/place p 
         #output: the annihilator L of g and the initial datas [[c_0, ... ,c_d], ... ] such that 
         #g is the solution to L * g given any element of the initial data.
@@ -244,19 +254,17 @@ class MixedHodgeStructure:
             try: 
                 val = self.eval(g,p)
             except ValueError:
+                #if the denominator is equal to 0 then we have a 0/0 situation on our hand and we 
+                #evaluate at every place. 
                 p_place = kC.maximal_order().ideal(kC(self._x) - a, kC(self._y) - b).divisor().support()
-                return [g.evaluate(p) for p in p_place]
+                return [(g.evaluate(p), p) for p in p_place]
             else: 
-                return [val]
-
-
-            
-            #if the denominator is equal to 0 then we have a 0/0 situation on our hand and we 
-            #evaluate at every place. 
+                return [(val, None)]
 
 
 
         initial_values = []
+        corr_places = [] 
             
         for n,rho in enumerate(rho_values): 
             Lambda = prod(rho - rho_values[i] for i in range(n))
@@ -275,19 +283,23 @@ class MixedHodgeStructure:
             )
 
             temp = []
-            for c in c_n_v:
+            for c, pl in c_n_v:
 
                 z = AlgebraicField().zeta(v)
                 c_n = AlgebraicField()(c ** (1/v))
-                temp.extend([c_n * z ** i for i in range(v)])
+                temp.extend([(c_n * z ** i, pl) for i in range(v)])
 
             initial_values.append(temp)
             
         #book keeping for initial values, we have all the possibilities for every coefficient of the 
-        #monomial basis, but we want to package initial conditions as [c_0, c_1, .., c_n] not as
-        #[[possible c_0], [possible c_1], .., [possible c_n]]
-
+        #monomial basis, but we want to package initial conditions as ([c_0, c_1, .., c_n], place) not as
+        #[[possible c_0,place], [possible c_1,place], .., [possible c_n,place]]    
         output = [list(tup) for tup in product(*initial_values)]
+        output = [tup for tup in output if len(set(c[1] for c in tup)) <= 1]
+        output = [([a[0] for a in tup], tup[0][1]) if tup else [] for tup in output]
+
+        if not with_places:
+            output = [tup[0] if tup else [] for tup in output]
 
         self._test = initial_values
 
@@ -582,16 +594,6 @@ class MixedHodgeStructure:
 
         if not self._E_empty:
 
-            #here we define the places corresponding to E. we do this over QQbar for now but this can be done more generally
-            if hasattr(self, '_E_places'):
-                places = self._E_places
-            else: 
-                OC = self._function_field_Qbar.maximal_order()
-                x,y = OC(self._x), OC(self._y)
-                places_with_point = [(e,p) for e in self._E for p in OC.ideal(x - e[0], y - e[1]).divisor().support()]
-                self._E_places   = [p for _,p in places_with_point]
-                self._E_unzipped = [e for e,_ in places_with_point] 
-
             QE = AlgebraicField()**(len(self._E_places))
             H = cartesian_product([A,QE])
             self._H = H
@@ -808,6 +810,7 @@ class MixedHodgeStructure:
 
         self._upstairs_graph = []
         remaining_edges = []
+        self._edge_dict = dict()
 
         self._giga_test = []
 
@@ -842,6 +845,11 @@ class MixedHodgeStructure:
                     
 
                     self._upstairs_graph.append((ini,ter))
+                    point = (AlgebraicField()(ini[0]), self.lift_pt(ini[0])[ini[1]])
+                    if point in self._E:
+                        #there will only be one element in self._E_unzipped equal to point since if there were multiple, 
+                        #then this edge would not survive the first if clause. Hence asking for the index as below is fine.
+                        self._edge_dict.update({(ini,ter) : self._E_places[self._E_unzipped.index(point)]})
             else: 
                 remaining_edges.append(e)
 
@@ -857,16 +865,26 @@ class MixedHodgeStructure:
 
             for i, initial_pt in enumerate(ini_lifts):
 
-                L, inits = self._get_initial_data(self._y, (e[0],initial_pt))
+                L, inits = self._get_initial_data(self._y, (e[0],initial_pt), with_places = True)
+                corresponding_places = [ini[1] for ini in inits]
+                inits = [ini[0] for ini in inits]
                 sols = [L.numerical_solution(ini = ini, path = [e[0], e[1]]) for ini in inits]
 
                 for j, terminal in enumerate(ter_lifts):
 
-                    if any(0 in Ball - terminal for Ball in sols):
+                    value_check = [0 in Ball - terminal for Ball in sols]
+
+                    if any(value_check):
+                        k = value_check.index(True)
                         ini = (e[0], i)
                         ter = (e[1], j)
                         self._upstairs_graph.append((ini, ter))
                         self._test_edges.append((ini,ter))
+
+                        #the lifted edge here is going to connect to ini but spiritually (and mathematically) this edge corresponds 
+                        #to the point in the normalization corresponding to this place. 
+                        self._edge_dict.update({(ini,ter) : corresponding_places[k]}) 
+                        
 
         self._upstairs_vertices = list(set(
             [e[0] for e in self._upstairs_graph] + 
@@ -1003,19 +1021,37 @@ class MixedHodgeStructure:
                 r += 1
 
         self._basis_homology = [v for v in matrix(vector_basis).LLL()]
-    
+        G = self._upstairs_graph
+        self._basis_loops = [[G[i] if a == 1 else (G[i][1], G[i][0]) for i,a in enumerate(v) if a != 0] for v in self._basis_homology]
+        
         return self._basis_homology
 
 
-    def _integrate_edge(self, omega, e):
+    def _integrate_edge(self, omega, e, eps = 1e-16):
 
         start, end = e
 
         if not self._E_empty:
+
             omega,v = omega
-            f = {e : a for e,a in zip(self._E_unzipped, v)}
-            to_p = lambda a : (a[0], self.lift_pt(a[0])[a[1]]) 
-            boundary_value = f.get(to_p(end),0) - f.get(to_p(start),0)
+
+            #here we check what the orientation of e is w.r.t. how it occurs in self._upstairs_graph 
+            #the boundary values will only contribute if one of the endpoints is a point in E, hence, we only 
+            #have to check the E_places. Note that we first figure out which *place* the edge corresponds to and then 
+            #determine the index of v we need to care about. 
+
+            relevant_place          = self._edge_dict.get(e)
+            relevant_place_reversed = self._edge_dict.get((end, start))
+
+            if relevant_place == None and relevant_place_reversed != None:
+                relevant_place = relevant_place_reversed
+                sign = -1
+            else: 
+                sign = 1 
+
+            #if e does not correspond to a relevant place, then 'self._E_dict.get(relevant_place, len(v))' will be equal to 0 
+            #and hence will return the last value of v + [0] which is 0. 
+            boundary_value = sign * (list(v) + [0])[self._E_dict.get(relevant_place, len(v))]
 
 
         p = (AlgebraicField()(start[0]), self.lift_pt(start[0])[start[1]])
@@ -1031,26 +1067,27 @@ class MixedHodgeStructure:
             L, inits, rho_values = self._get_initial_data(omega._f, p, local_basis = True)
             omega._annihilator = L
         else: 
-            L,inits, rho_values = self._get_initial_data(omega._f, p, annihilator = omega._annihilator, local_basis = True)
-
+            L, inits, rho_values = self._get_initial_data(omega._f, p, annihilator = omega._annihilator, local_basis = True)
 
         ini = [0] + [~(rho + 1) * c for rho , c in zip(rho_values, inits[0])]
         path = [AlgebraicField()(start[0]), AlgebraicField()(end[0])]
 
-        integral = (L.annihilator_of_integral()).numerical_solution(ini = ini, path = path)
+        print(eps)
+        integral = (L.annihilator_of_integral()).numerical_solution(ini = ini, path = path, eps = eps)
 
         if reversed: 
             integral = -integral 
             
         return integral + boundary_value
         
-    def _integrate_vector(self, v, gamma):
+    def _integrate_vector(self, v, gamma, eps = 1e-16):
         #input: a vector v from a vector space over QQbar of the same dimension as H_AdR^1(C) (so what self.cohomology() outputs)
         #and an element gamma which is an element from the free module on the edges of self._upstairs_graph
         #output I(v,gamma) where I is the integration pairing between betti homology and derham cohomology. 
         
         if not hasattr(self, '_master_matrix'):
-            self._master_matrix = [[None for _ in self._upstairs_graph] for _ in self.cohomology_basis()]
+            self._master_matrix        = [[None for _ in self._upstairs_graph] for _ in self.cohomology_basis()]
+            self._master_matrix_errors = [[None for _ in self._upstairs_graph] for _ in self.cohomology_basis()]
 
         indices_cohom = [i for i,a in enumerate(v) if a != 0]
         indices_hom   = [j for j,a in enumerate(gamma) if a != 0] 
@@ -1060,8 +1097,11 @@ class MixedHodgeStructure:
 
         for i,j in product(indices_cohom, indices_hom):
 
-            if self._master_matrix[i][j] == None: 
-                self._master_matrix[i][j] = self._integrate_edge(self._cohomology_basis[i], self._upstairs_graph[j])
+            if (self._master_matrix[i][j]) == None or (self._master_matrix_errors[i][j] > eps): 
+                #NOTE: this is the only place where we integrate edges, the orientation of the edge will always be as they occur 
+                #in self._upstairs_graph. The orientation is then determined by the coefficient of gamma, as below 
+                self._master_matrix[i][j] = self._integrate_edge(self._cohomology_basis[i], self._upstairs_graph[j], eps = eps)
+                self._master_matrix_errors[i][j] = eps
 
             output +=  v[i] * gamma[j] * self._master_matrix[i][j]
 
@@ -1081,10 +1121,18 @@ class MixedHodgeStructure:
 
         return self._master_matrix
  
-    def period_matrix(self):
+    def period_matrix(self, eps = 1e-16):
+
+        if hasattr(self, '_period_matrix'):
+            if self._period_eps < eps:
+                return self._period_matrix
+
 
         V,_,_ = self.cohomology()
         H     = self.homology_basis()
+        
+        self._period_matrix = matrix([[self._integrate_vector(v,gamma, eps = eps) for v in V.basis()] for gamma in H])
+        self._period_eps    = eps 
 
-        return matrix([[self._integrate_vector(v,gamma) for v in V.basis()] for gamma in H])
+        return self._period_matrix
 
