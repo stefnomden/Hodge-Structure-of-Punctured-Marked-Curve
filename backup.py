@@ -29,7 +29,7 @@ def voronoi(pts, n = 6):
         smallest_dist = 1
     else:
         smallest_dist = min([
-            AlgebraicField()(abs(alpha - beta)) for alpha in pts for beta in pts 
+            ComplexField()(abs(alpha - beta)) for alpha in pts for beta in pts 
             if alpha != beta 
         ])
 
@@ -39,16 +39,17 @@ def voronoi(pts, n = 6):
     C = ComplexField(prec = prec)
 
     centre = sum(pts)/len(pts)
-    radius = 2 * max([abs(centre - z) for z in pts]) if len(pts) != 1 else 1
+    radius = 2 * max([abs(C(centre) - C(z)) for z in pts]) if len(pts) != 1 else 1
     z = AlgebraicField().zeta(n)
     circle_points = [C(centre + radius * z ** i) for i in range(6)]
+
 
     return VoronoiDiagram([C(v) for v in pts] + circle_points)
 
 
 class MixedHodgeStructure:
 
-    def __init__(self, P, D, E, prec = 53):
+    def __init__(self, P, D = [], E = [], prec = 53):
 
         self._prec = prec
         self._P = P
@@ -161,7 +162,9 @@ class MixedHodgeStructure:
 
     def _get_annihilator(self, g):
 
-        F = g.parent().constant_base_field()
+        #typically, F is way too large. We would probably only want F to be the field in which the coefficients of g lie
+        #this may not seem like such a big deal, .nuerical_solution slows down quite a lot depending on where the field is defined.
+        F = g.parent().constant_base_field() 
 
         derivatives = []
         r = 0
@@ -261,8 +264,6 @@ class MixedHodgeStructure:
             else: 
                 return [(val, None)]
 
-
-
         initial_values = []
         corr_places = [] 
             
@@ -278,6 +279,7 @@ class MixedHodgeStructure:
             #here c_n_v is an array: at a singular point, we may get the issue that there are two places above this point
             #the issue then becomes that the evaluation may not be well-defined, thus the evaluation is possibly multivalued.
             #each of these values corresponds to a different path g can take.
+
             c_n_v = eval_special(
                 ((kC(x) - a) ** u) * ((~(f_d_rho * Lambda) * factorial(k) * h_n.higher_derivative(k)) ** v)
             )
@@ -402,13 +404,13 @@ class MixedHodgeStructure:
             self._index = 1
             return []
         #right now the off_set is constant zero but we would like it to not be equal to the   
-        #x coordinate of a point in E or a branch point
+        #x coordinate of a point in E or a branch point or a point which the plane graph goes through
         off_set = self._Field(1/3)
         x,y = self._x, self._y
-        places_above_zero = list(map(lambda L : L[0].place(), self._OC.ideal(x-off_set).factor()))
+        places_above_zero = list(map(lambda L : L[0].place(), self._OC.ideal(x - off_set).factor()))
         places_above_infty = list(map(lambda L : L[0].place(), self._OCoo.ideal(1/x).factor()))
-        divx = self._function_field(x).divisor_of_poles()
-        div1_over_x = self._function_field(1/x).divisor_of_poles()
+        divx = self._function_field(x - off_set).divisor_of_poles()
+        div1_over_x = self._function_field(1/(x - off_set)).divisor_of_poles()
         divy = y.divisor_of_poles()
         canon_div_of_poles = divx + sum(divx.support())
         self._canon_div_of_poles = canon_div_of_poles
@@ -423,11 +425,11 @@ class MixedHodgeStructure:
         j = 0
         while len(residues) <= 2*self._genus or len(A.kernel().basis()) < 2*self._genus + 3:
             #the functions we generate only have poles above zero or infinity
-            print(forms[j])
+            #print(forms[j])
             import time
             start = time.time()
             residues.append([r for p in places_above_zero + places_above_infty for r in forms[j].residue(p).list()])
-            print('time: {}'.format(time.time() - start))
+            #print('time: {}'.format(time.time() - start))
             A = matrix(residues)
             #print(A.kernel().basis(),end = '\n\n')
             #generate more functions if we run out
@@ -735,7 +737,7 @@ class MixedHodgeStructure:
 
         self.branch_points = self._P.discriminant(self._P.parent().gens()[1])(t,0).roots(multiplicities = False)
 
-        self.branch_points_and_xD = self.branch_points + [x[0] for x in self._D if x[0] not in self.branch_points] 
+        self.branch_points_and_xD = self.branch_points + list(set([x[0] for x in self._D if x[0] not in self.branch_points]))
 
         self._E_ramif = [e for e in self._E if e[0] in self.branch_points] 
 
@@ -883,7 +885,7 @@ class MixedHodgeStructure:
 
                         #the lifted edge here is going to connect to ini but spiritually (and mathematically) this edge corresponds 
                         #to the point in the normalization corresponding to this place. 
-                        print('place:', corresponding_places[k])
+                        #print('place:', corresponding_places[k])
                         if corresponding_places[k] != None: 
                             self._edge_dict.update({(ini,ter) : corresponding_places[k]}) 
                         else: 
@@ -902,7 +904,8 @@ class MixedHodgeStructure:
         #where an elements of self._upstairs_graph is a tuple of points (a,b) on C which represents a lift of 
         #the straight path connecting (x(a), x(b)) on the plane. 
 
-
+        if hasattr(self, '_basis_homology'):
+            return self._basis_homology
         if not hasattr(self, '_plane_verts'):
             self._set_plane_graph()
         if not hasattr(self, '_upstairs_graph'): 
@@ -914,9 +917,9 @@ class MixedHodgeStructure:
         A = matrix(
             [[0 if v in self._E_as_index else {e[0] : 1, e[1] : -1}.get(v,0) for v in self._upstairs_vertices] 
             for e in self._upstairs_graph]
-        )
+        )   
+        self.boundary_map = A
         graph_cohom = A.kernel().basis()
-        #graph_cohom = [v for v in matrix(graph_cohom).LLL()]
         self._graph_cohom = graph_cohom
 
         K = []
@@ -951,8 +954,14 @@ class MixedHodgeStructure:
 
         #here we remove the loops that lie around points in D from the kernel K. 
         to_be_removed = []
+        self._something_wrong = []
+
+        def winding_number(z, loop):
+            return abs(sum(ComplexField()(arg((a - z) / (b - z))) for a,b in loop))
+
 
         for d in self._D:
+
             close_to_d = min(self._plane_verts, key = lambda z : abs(z - d[0]))
             path = [d[0], close_to_d]
 
@@ -964,14 +973,19 @@ class MixedHodgeStructure:
 
             verts = [(close_to_d, i) for i in indices]
 
-            i,_ = min(enumerate(self._plane_loops),
-                   key = lambda A : sum(abs(d[0] - v) for v in {e[0] for e in A[1]} | {e[1] for e in A[1]})/len(A[1])
-            )
+
+            #i,_ = min(enumerate(self._plane_loops),
+            #       key = lambda A : sum(abs(ComplexField()(d[0]) - ComplexField()(v)) for v in {e[0] for e in A[1]} | {e[1] for e in A[1]})/len(A[1])
+            #)
         
+            i,_ = max(enumerate(self._plane_loops[:-1]),
+                      key = lambda A : winding_number(d[0], A[1])
+            )
+
             d_lifted_loops = [
                 [{1 : self._test_loops[i][j], -1 : (self._test_loops[i][j][1], self._test_loops[i][j][0])}.get(a)
                 for j,a in enumerate(v) if a != 0] for v in self._test_kernels[i]
-            ]  
+            ] 
 
             d_lifted_loops_verts = [list({e[0] for e in O} | {e[1] for e in O}) for O in d_lifted_loops] 
 
@@ -983,9 +997,9 @@ class MixedHodgeStructure:
 
             for k in indices_to_be_removed:
                 i = self._K_loops_ordered.index(d_lifted_loops[k])
+                self._something_wrong.append(d_lifted_loops[k])
                 to_be_removed.append(i)
-            
-
+        self._test_removed = to_be_removed
 
         loops_around_oo = self._K_loops_ordered[-len(self._test_kernels[-1]):]
         if len(loops_around_oo) == len(self._D_infinite):
@@ -1014,6 +1028,7 @@ class MixedHodgeStructure:
                         to_be_removed.append(i)
 
 
+
         K = [v for i,v in enumerate(K) if i not in to_be_removed]
         self.K = K
 
@@ -1029,6 +1044,56 @@ class MixedHodgeStructure:
         self._basis_loops = [[G[i] if a == 1 else (G[i][1], G[i][0]) for i,a in enumerate(v) if a != 0] for v in self._basis_homology]
         
         return self._basis_homology
+
+    def homology(self):
+
+        H = self.homology_basis()
+
+        W = IntegerRing() ** len(H)
+
+        def from_W(w):
+            return sum(
+                a * H[i] for i,a in enumerate(w)
+            )
+
+        def to_W(w):
+
+            if w * self.boundary_map != 0:
+                raise ValueError('{} does not define an element of homology'.format(w))
+
+            V,_,_ = self.cohomology()
+
+            def guess(z): 
+                Re = z.real()
+                Im = z.imag()
+                if (Re.rad() < .5) and (Im.rad() < .5):
+                    guessRe = Re.center().round()
+                    guessIm = Im.center().round()
+                    if (guessRe in Re) and (guessIm in Im):
+                        return guessRe
+
+                raise ValueError()
+            
+            eps = 1e-16
+            for _ in range(5):
+
+                p_frak = self.period_matrix(eps = eps)
+                integrated_vector = vector(self._integrate_vector(v, w, eps = eps) for v in V.basis())
+                approx_coords = p_frak.transpose().inverse() * integrated_vector
+
+                try: 
+                    output = [guess(z) for z in approx_coords]
+                except ValueError:
+                    eps = (eps) ** 2
+                else: 
+                    return output
+                
+            raise ValueError(
+                'Precision error, something is wrong. The vector {} is supposed to be integral.'.format(approx_coords)
+            )
+    
+        return W, from_W, to_W
+        
 
 
     def _integrate_edge(self, omega, e, eps = 1e-16):
@@ -1074,13 +1139,39 @@ class MixedHodgeStructure:
             L, inits, rho_values = self._get_initial_data(omega._f, p, annihilator = omega._annihilator, local_basis = True)
 
         ini = [0] + [~(rho + 1) * c for rho , c in zip(rho_values, inits[0])]
-        path = [AlgebraicField()(start[0]), AlgebraicField()(end[0])]
 
-        integral = (L.annihilator_of_integral()).numerical_solution(ini = ini, path = path, eps = eps)
+
+        a,b = AlgebraicField()(start[0]), AlgebraicField()(end[0])
+        path = [a,b]
+
+        try: 
+            integral = (L.annihilator_of_integral()).numerical_solution(ini = ini, path = path, eps = eps)
+        except ValueError:
+            #sometimes there is a singular point on the edge we integrate over, in this case we add
+            #the singular points to the edges
+
+            import time
+            start = time.time()
+            sing_pts = L.leading_coefficient().roots(ring = AlgebraicField(), multiplicities = False)
+
+            path_with_t = [(a,0), (b,1)]
+            interval = RealBallField()(0.5, 0.5)
+
+            for z in sing_pts: 
+                t = (z - a)/(b - a) 
+                if (t.real() in interval) and (abs(t.imag()) < 2 ** (- self._prec)):
+                    path_with_t.append((z,t))
+            path_with_t.sort(key = lambda tup : tup[1])
+            path = [tup[0] for tup in path_with_t]
+            integral = (L.annihilator_of_integral()).numerical_solution(ini = ini, path = path, eps = eps)
+
 
         if reversed: 
             integral = -integral 
-            
+
+        if self._E_empty:
+            return integral    
+
         return integral + boundary_value
         
     def _integrate_vector(self, v, gamma, eps = 1e-16):
