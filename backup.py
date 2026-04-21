@@ -962,33 +962,40 @@ class MixedHodgeStructure:
 
         for d in self._D:
 
-            close_to_d = min(self._plane_verts, key = lambda z : abs(z - d[0]))
+            #find the vertex in the plane graph which lies closest to d 
+            close_to_d = min(
+                [v for v in self._plane_verts if v not in [e[0] for e in self._E]], 
+                key = lambda z : abs(z - d[0])
+            )
             path = [d[0], close_to_d]
 
             L,inits = self._get_initial_data(self._y, d)
 
+            #here we figure out which edges lie above 'path' with initial point d
             endpts = [L.numerical_solution(ini = ini, path = path) for ini in inits]
             lifts = self.lift_pt(close_to_d)
             indices = [lifts.index(min(lifts, key = lambda z : abs(z - a))) for a in endpts]
 
+            #so 'verts' are the endpoints of the paths to which d goes
             verts = [(close_to_d, i) for i in indices]
-
-
-            #i,_ = min(enumerate(self._plane_loops),
-            #       key = lambda A : sum(abs(ComplexField()(d[0]) - ComplexField()(v)) for v in {e[0] for e in A[1]} | {e[1] for e in A[1]})/len(A[1])
-            #)
         
+            #the index in 'self._plane_loops' in which d lies
             i,_ = max(enumerate(self._plane_loops[:-1]),
                       key = lambda A : winding_number(d[0], A[1])
             )
 
+            #these are the loops which lie above the loop in which d lies. We now aim to identify the loops
+            #which have elements of 'verts'
             d_lifted_loops = [
                 [{1 : self._test_loops[i][j], -1 : (self._test_loops[i][j][1], self._test_loops[i][j][0])}.get(a)
                 for j,a in enumerate(v) if a != 0] for v in self._test_kernels[i]
             ] 
+            self._d_loops_test = d_lifted_loops
 
             d_lifted_loops_verts = [list({e[0] for e in O} | {e[1] for e in O}) for O in d_lifted_loops] 
 
+            #we loop over every vertex in 'vert' and remember the index in the above list so that 
+            #we know what loop we need to remove from 'K'
             indices_to_be_removed = []
             for v in verts:
                 for k, vertices in enumerate(d_lifted_loops_verts):
@@ -999,6 +1006,7 @@ class MixedHodgeStructure:
                 i = self._K_loops_ordered.index(d_lifted_loops[k])
                 self._something_wrong.append(d_lifted_loops[k])
                 to_be_removed.append(i)
+
         self._test_removed = to_be_removed
 
         loops_around_oo = self._K_loops_ordered[-len(self._test_kernels[-1]):]
