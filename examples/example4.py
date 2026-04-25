@@ -1,3 +1,6 @@
+from sage.hodge_theory import MHS
+from sage.hodge_theory import auxiliary
+
 #node example
 _.<a,b> = QQ[]
 f = a^3 + a^2
