@@ -566,7 +566,8 @@ class MixedHodgeStructure:
                 )
             check_add_forms(divisor, rowbuilder)
 
-        if len(places) > 1:
+        if len(places) > 0:
+
             divisor = -sum(places)
             def rowbuilder(omega):
                 return (
